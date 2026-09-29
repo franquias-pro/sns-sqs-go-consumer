@@ -61,7 +61,7 @@ go mod tidy
 go run ./cmd/consumer
 ```
 
-O SDK usa perfil local, variáveis de ambiente ou role do workload. A role precisa de `sqs:ReceiveMessage` e `sqs:DeleteMessageBatch` na fila. O Terraform de exemplo cria recursos AWS com custo real; confira região e nome antes de aplicar.
+O SDK usa perfil local, variáveis de ambiente ou role do workload. A role precisa de `sqs:ReceiveMessage` e `sqs:DeleteMessage` na fila; a permissão `DeleteMessage` também cobre a operação em lote. O Terraform de exemplo cria recursos AWS com custo real; confira região e nome antes de aplicar.
 
 Para publicar um evento:
 
@@ -107,7 +107,7 @@ docker build -t SEU_REGISTRY/sns-sqs-go-consumer:1.0.0 .
 docker push SEU_REGISTRY/sns-sqs-go-consumer:1.0.0
 ```
 
-Antes de `kubectl apply -f k8s/consumer.yaml`, troque no manifesto a imagem, a URL da fila e o endpoint APM. Crie um Secret chamado `sns-sqs-go-consumer` com a chave `mongo-uri` (e opcionalmente `apm-secret-token`). Associe o ServiceAccount a uma role IAM com `sqs:ReceiveMessage` e `sqs:DeleteMessageBatch` na fila, por EKS Pod Identity ou IRSA. O manifesto traz duas réplicas como exemplo; ajuste workers, requests e limits com dados do teste de carga. O `terminationGracePeriodSeconds` de 60 s cobre o `SHUTDOWN_TIMEOUT` de 45 s e o flush de telemetria.
+Antes de `kubectl apply -f k8s/consumer.yaml`, troque no manifesto a imagem, a URL da fila e o endpoint APM. Crie um Secret chamado `sns-sqs-go-consumer` com a chave `mongo-uri` (e opcionalmente `apm-secret-token`). Associe o ServiceAccount a uma role IAM com `sqs:ReceiveMessage` e `sqs:DeleteMessage` na fila, por EKS Pod Identity ou IRSA. O manifesto traz duas réplicas como exemplo; ajuste workers, requests e limits com dados do teste de carga. O `terminationGracePeriodSeconds` de 60 s cobre o `SHUTDOWN_TIMEOUT` de 45 s e o flush de telemetria.
 
 - `GET /healthz`: liveness, responde enquanto o processo HTTP está ativo.
 - `GET /readyz`: readiness, responde 200 somente durante a operação e com MongoDB acessível; devolve 503 no desligamento ou se o ping falhar.

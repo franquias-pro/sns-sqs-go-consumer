@@ -24,7 +24,7 @@ apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: sns-sqs-go-consumer
-  # Associate this account with an IAM role that grants SQS receive/delete.
+  # Associate this account with an IAM role granting sqs:ReceiveMessage and sqs:DeleteMessage.
 ---
 apiVersion: apps/v1
 kind: Deployment

@@ -23,6 +23,8 @@ jobs:
       - name: Compose smoke test
         run: |
           docker compose up --build --wait -d
+          curl -fsS http://localhost:8080/healthz
+          curl -fsS http://localhost:8080/readyz
           for i in 1 2; do
             docker compose exec -T localstack awslocal sns publish \
               --topic-arn arn:aws:sns:us-east-1:000000000000:example-events \
