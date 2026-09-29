@@ -15,13 +15,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"go.elastic.co/apm/v2"
 
-	appconfig "example.com/sns-sqs-go-consumer/internal/config"
-	"example.com/sns-sqs-go-consumer/internal/consumer"
-	"example.com/sns-sqs-go-consumer/internal/handler"
-	"example.com/sns-sqs-go-consumer/internal/health"
-	"example.com/sns-sqs-go-consumer/internal/observability"
-	"example.com/sns-sqs-go-consumer/internal/repository/mongodb"
-	"example.com/sns-sqs-go-consumer/internal/service"
+	appconfig "github.com/mamartins1997/sns-sqs-go-consumer/internal/config"
+	"github.com/mamartins1997/sns-sqs-go-consumer/internal/consumer"
+	"github.com/mamartins1997/sns-sqs-go-consumer/internal/handler"
+	"github.com/mamartins1997/sns-sqs-go-consumer/internal/health"
+	"github.com/mamartins1997/sns-sqs-go-consumer/internal/observability"
+	"github.com/mamartins1997/sns-sqs-go-consumer/internal/repository/mongodb"
+	"github.com/mamartins1997/sns-sqs-go-consumer/internal/service"
 )
 
 func main() {

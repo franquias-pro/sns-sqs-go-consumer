@@ -10,7 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
-	"example.com/sns-sqs-go-consumer/internal/event"
+	"github.com/mamartins1997/sns-sqs-go-consumer/internal/event"
 )
 
 type EventRepository struct {

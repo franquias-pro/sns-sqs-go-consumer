@@ -16,7 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sns"
 	"github.com/aws/aws-sdk-go-v2/service/sns/types"
 
-	"example.com/sns-sqs-go-consumer/internal/observability"
+	"github.com/mamartins1997/sns-sqs-go-consumer/internal/observability"
 )
 
 // The load generator publishes through SNS so the observed throughput includes

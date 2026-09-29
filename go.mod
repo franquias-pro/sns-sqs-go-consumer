@@ -1,4 +1,4 @@
-module example.com/sns-sqs-go-consumer
+module github.com/mamartins1997/sns-sqs-go-consumer
 
 go 1.25
 

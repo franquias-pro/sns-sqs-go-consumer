@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	"example.com/sns-sqs-go-consumer/internal/event"
+	"github.com/mamartins1997/sns-sqs-go-consumer/internal/event"
 )
 
 // OrderRepository is implemented by the MongoDB adapter. Other persistence

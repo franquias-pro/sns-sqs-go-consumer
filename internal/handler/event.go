@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"example.com/sns-sqs-go-consumer/internal/event"
+	"github.com/mamartins1997/sns-sqs-go-consumer/internal/event"
 )
 
 type orderData struct {

@@ -11,7 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
 
-	"example.com/sns-sqs-go-consumer/internal/config"
+	"github.com/mamartins1997/sns-sqs-go-consumer/internal/config"
 )
 
 type Queue interface {

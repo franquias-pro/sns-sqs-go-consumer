@@ -3,7 +3,7 @@ package observability
 import (
 	"go.elastic.co/apm/v2"
 
-	"example.com/sns-sqs-go-consumer/internal/consumer"
+	"github.com/mamartins1997/sns-sqs-go-consumer/internal/consumer"
 )
 
 type ElasticTracer struct { tracer *apm.Tracer }

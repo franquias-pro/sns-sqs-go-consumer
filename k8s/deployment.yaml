@@ -16,7 +16,7 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
         - name: consumer
-          image: ghcr.io/franquias-pro/sns-sqs-go-consumer:latest
+          image: ghcr.io/mamartins1997/sns-sqs-go-consumer:latest
           imagePullPolicy: Always
           ports:
             - name: health

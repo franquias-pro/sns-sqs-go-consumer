@@ -1,5 +1,7 @@
 # SNS → SQS consumer em Go
 
+[Repositório do projeto](https://github.com/mamartins1997/sns-sqs-go-consumer).
+
 Exemplo de consumer para eventos SNS FIFO entregues em uma fila SQS FIFO com **raw message delivery**. O processo usa long polling, limita mensagens em voo, trata grupos distintos em paralelo com workers e confirma em lotes. Lê uma mensagem por chamada para manter a ordem de processamento dentro de cada `MessageGroupId`. A meta de **1.000 mensagens/s é uma hipótese de dimensionamento**, que depende do número de grupos ativos, da duração do handler, dos limites da conta AWS, da rede, das réplicas e do MongoDB.
 
 ## Estrutura
@@ -121,10 +123,10 @@ O arquivo `.env.example` é um modelo; Go não lê `.env` automaticamente. Em pr
 `Dockerfile` compila um binário estático e o executa como usuário sem privilégios em uma imagem `scratch`. O workflow em `.github/workflows/deploy.yml` executa os jobs em sequência: `compile` (build Go), `integration` (validação do Compose e teste SNS → SQS → MongoDB) e `image` (build da imagem). Cada job só roda se o anterior passar. Em pull requests, a imagem é construída sem publicação; em cada push na `main`, o último job publica no GitHub Container Registry (`ghcr.io`) as tags `latest` e `sha-<commit completo>`:
 
 ```bash
-docker pull ghcr.io/franquias-pro/sns-sqs-go-consumer:latest
+docker pull ghcr.io/mamartins1997/sns-sqs-go-consumer:latest
 ```
 
-O workflow usa o `GITHUB_TOKEN` com permissão `packages: write`. Pacotes novos do GHCR podem nascer privados: para permitir pull anônimo ou por um cluster sem credenciais, configure a visibilidade do pacote como pública no GitHub. Se permanecer privado, configure `imagePullSecrets` no Deployment com credenciais de leitura do pacote. Para deploy reproduzível, substitua `latest` por uma tag `sha-<commit completo>` em `k8s/deployment.yaml` e use `imagePullPolicy: IfNotPresent`.
+O workflow usa o `GITHUB_TOKEN` com permissão `packages: write` do repositório `mamartins1997/sns-sqs-go-consumer`; a referência em `k8s/deployment.yaml` usa o mesmo namespace do GHCR. Pacotes novos do GHCR podem nascer privados: para permitir pull anônimo ou por um cluster sem credenciais, configure a visibilidade do pacote como pública no GitHub. Se permanecer privado, configure `imagePullSecrets` no Deployment com credenciais de leitura do pacote. Para deploy reproduzível, substitua `latest` por uma tag `sha-<commit completo>` em `k8s/deployment.yaml` e use `imagePullPolicy: IfNotPresent`.
 
 Os recursos Kubernetes estão em arquivos separados. Ajuste `k8s/configmap.yaml` (URL da fila, região, endpoint APM), configure a role IAM no `k8s/serviceaccount.yaml` via EKS Pod Identity ou IRSA e crie o Secret real a partir do modelo. O Secret precisa de `mongo-uri`; `apm-secret-token` é opcional. O arquivo `k8s/secret.yaml` está no `.gitignore`:
 
