@@ -21,6 +21,7 @@ jobs:
           go build ./...
 
   integration:
+    needs: compile
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -59,7 +60,7 @@ jobs:
         run: docker compose down -v
 
   image:
-    needs: [compile, integration]
+    needs: integration
     runs-on: ubuntu-latest
     permissions:
       contents: read
