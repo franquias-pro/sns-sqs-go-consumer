@@ -16,3 +16,26 @@ jobs:
         run: |
           go mod tidy
           go build ./...
+      - name: Validate deployment examples
+        run: |
+          sh -n infra/localstack/init.sh
+          docker compose config --quiet
+      - name: Compose smoke test
+        run: |
+          docker compose up --build --wait -d
+          for i in 1 2; do
+            docker compose exec -T localstack awslocal sns publish \
+              --topic-arn arn:aws:sns:us-east-1:000000000000:example-events \
+              --message '{"event_id":"ci-smoke-1","type":"order.created","occurred_at":"2026-09-28T20:00:00Z","data":{"order_id":"ci-1"}}'
+          done
+          for attempt in $(seq 1 30); do
+            count=$(docker compose exec -T mongo mongosh --quiet events \
+              --eval 'db.ingested_events.countDocuments({_id:"ci-smoke-1"})' | tr -d '\r')
+            if [ "$count" = "1" ]; then exit 0; fi
+            sleep 2
+          done
+          docker compose logs consumer localstack
+          exit 1
+      - name: Stop Compose
+        if: always()
+        run: docker compose down -v

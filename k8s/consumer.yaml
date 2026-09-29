@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sns-sqs-go-consumer
+data:
+  AWS_REGION: us-east-1
+  SQS_QUEUE_URL: https://sqs.us-east-1.amazonaws.com/123456789012/example-events
+  MONGO_DATABASE: events
+  MONGO_COLLECTION: ingested_events
+  MONGO_MAX_POOL_SIZE: "100"
+  HEALTH_ADDR: ":8080"
+  POLLERS: "16"
+  WORKERS: "200"
+  ACKERS: "8"
+  PROCESS_TIMEOUT: 15s
+  VISIBILITY_TIMEOUT: "120"
+  SHUTDOWN_TIMEOUT: 45s
+  ELASTIC_APM_SERVICE_NAME: sns-sqs-go-consumer
+  ELASTIC_APM_SERVER_URL: http://apm-server.observability.svc.cluster.local:8200
+  ELASTIC_APM_TRANSACTION_SAMPLE_RATE: "0.01"
+  ELASTIC_APM_METRICS_INTERVAL: 30s
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sns-sqs-go-consumer
+  # Associate this account with an IAM role that grants SQS receive/delete.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sns-sqs-go-consumer
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sns-sqs-go-consumer
+  template:
+    metadata:
+      labels:
+        app: sns-sqs-go-consumer
+    spec:
+      serviceAccountName: sns-sqs-go-consumer
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: consumer
+          image: 123456789012.dkr.ecr.us-east-1.amazonaws.com/sns-sqs-go-consumer:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: health
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: sns-sqs-go-consumer
+          env:
+            - name: MONGO_URI
+              valueFrom:
+                secretKeyRef:
+                  name: sns-sqs-go-consumer
+                  key: mongo-uri
+            - name: ELASTIC_APM_SECRET_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: sns-sqs-go-consumer
+                  key: apm-secret-token
+                  optional: true
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            periodSeconds: 10
+            timeoutSeconds: 2
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            periodSeconds: 5
+            timeoutSeconds: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]

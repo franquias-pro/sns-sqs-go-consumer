@@ -1,0 +1,77 @@
+services:
+  mongo:
+    image: mongo:8.0-noble
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  localstack:
+    image: localstack/localstack:4
+    environment:
+      AWS_DEFAULT_REGION: us-east-1
+      LOCALSTACK_HOST: localstack:4566
+      SQS_ENDPOINT_STRATEGY: path
+    ports:
+      - "4566:4566"
+    volumes:
+      - ./infra/localstack/init.sh:/etc/localstack/init/ready.d/init.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:4566/_localstack/init/ready | grep -q 'SUCCESSFUL'"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  consumer:
+    build:
+      context: .
+      args:
+        APP: consumer
+    environment:
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_EC2_METADATA_DISABLED: "true"
+      SQS_ENDPOINT_URL: http://localstack:4566
+      SQS_QUEUE_URL: http://localstack:4566/queue/us-east-1/000000000000/example-events
+      MONGO_URI: mongodb://mongo:27017
+      MONGO_DATABASE: events
+      MONGO_COLLECTION: ingested_events
+      ELASTIC_APM_ACTIVE: "false"
+      ELASTIC_APM_CENTRAL_CONFIG: "false"
+      ELASTIC_APM_SERVICE_NAME: sns-sqs-go-consumer
+    ports:
+      - "8080:8080"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    stop_grace_period: 60s
+
+  loadgen:
+    profiles: ["load"]
+    build:
+      context: .
+      args:
+        APP: loadgen
+    environment:
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_EC2_METADATA_DISABLED: "true"
+      SNS_ENDPOINT_URL: http://localstack:4566
+      SNS_TOPIC_ARN: arn:aws:sns:us-east-1:000000000000:example-events
+      RATE_PER_SECOND: "1000"
+      DURATION: 60s
+    depends_on:
+      localstack:
+        condition: service_healthy
+
+volumes:
+  mongo-data:

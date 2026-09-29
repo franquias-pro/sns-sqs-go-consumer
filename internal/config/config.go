@@ -11,6 +11,12 @@ import (
 type Config struct {
 	AWSRegion         string
 	QueueURL          string
+	SQSEndpointURL    string
+	MongoURI          string
+	MongoDatabase     string
+	MongoCollection   string
+	MongoMaxPoolSize  int
+	HealthAddr        string
 	Pollers           int
 	Workers           int
 	Ackers            int
@@ -21,8 +27,15 @@ type Config struct {
 }
 
 func Load() (Config, error) {
-	c := Config{AWSRegion: env("AWS_REGION", "us-east-1"), QueueURL: os.Getenv("SQS_QUEUE_URL"), LogLevel: env("LOG_LEVEL", "info")}
+	c := Config{
+		AWSRegion: env("AWS_REGION", "us-east-1"), QueueURL: os.Getenv("SQS_QUEUE_URL"),
+		SQSEndpointURL: os.Getenv("SQS_ENDPOINT_URL"), MongoURI: os.Getenv("MONGO_URI"),
+		MongoDatabase: env("MONGO_DATABASE", "events"),
+		MongoCollection: env("MONGO_COLLECTION", "ingested_events"),
+		HealthAddr: env("HEALTH_ADDR", ":8080"), LogLevel: env("LOG_LEVEL", "info"),
+	}
 	var err error
+	if c.MongoMaxPoolSize, err = integer("MONGO_MAX_POOL_SIZE", 100, 1, 10000); err != nil { return c, err }
 	if c.Pollers, err = integer("POLLERS", 16, 1, 128); err != nil { return c, err }
 	if c.Workers, err = integer("WORKERS", 200, 10, 10000); err != nil { return c, err }
 	if c.Ackers, err = integer("ACKERS", 8, 1, 128); err != nil { return c, err }
@@ -32,6 +45,7 @@ func Load() (Config, error) {
 	if c.ProcessTimeout, err = duration("PROCESS_TIMEOUT", 15*time.Second); err != nil { return c, err }
 	if c.ShutdownTimeout, err = duration("SHUTDOWN_TIMEOUT", 45*time.Second); err != nil { return c, err }
 	if c.QueueURL == "" { return c, fmt.Errorf("SQS_QUEUE_URL is required") }
+	if c.MongoURI == "" { return c, fmt.Errorf("MONGO_URI is required") }
 	if c.ProcessTimeout <= 0 || c.ShutdownTimeout <= 0 { return c, fmt.Errorf("timeouts must be positive") }
 	if c.ProcessTimeout+30*time.Second >= time.Duration(c.VisibilityTimeout)*time.Second {
 		return c, fmt.Errorf("VISIBILITY_TIMEOUT must exceed PROCESS_TIMEOUT by more than 30 seconds")

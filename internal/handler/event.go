@@ -15,9 +15,18 @@ type Event struct {
 	Data       json.RawMessage `json:"data"`
 }
 
-type Handler struct { logger *slog.Logger }
+type Repository interface {
+	Save(context.Context, Event, string) (inserted bool, err error)
+}
 
-func New(logger *slog.Logger) *Handler { return &Handler{logger: logger} }
+type Handler struct {
+	logger *slog.Logger
+	repository Repository
+}
+
+func New(logger *slog.Logger, repository Repository) *Handler {
+	return &Handler{logger: logger, repository: repository}
+}
 
 func (h *Handler) Handle(ctx context.Context, body string) error {
 	var event Event
@@ -25,13 +34,17 @@ func (h *Handler) Handle(ctx context.Context, body string) error {
 	if event.EventID == "" || event.Type == "" { return errors.New("event_id and type are required") }
 	if err := ctx.Err(); err != nil { return err }
 
-	// Replace this branch with an idempotent write or business action. A standard
-	// SQS queue can deliver the same event more than once.
 	switch event.Type {
 	case "order.created":
-		h.logger.Debug("order event handled", "event_id", event.EventID)
 	default:
 		return errors.New("unsupported event type: " + event.Type)
+	}
+	inserted, err := h.repository.Save(ctx, event, body)
+	if err != nil { return err }
+	if inserted {
+		h.logger.Debug("event persisted", "event_id", event.EventID)
+	} else {
+		h.logger.Debug("duplicate event ignored", "event_id", event.EventID)
 	}
 	return nil
 }

@@ -7,4 +7,5 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sns v1.41.0
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.52.1
 	go.elastic.co/apm/v2 v2.7.12
+	go.mongodb.org/mongo-driver/v2 v2.9.1
 )

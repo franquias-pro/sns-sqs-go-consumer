@@ -46,7 +46,11 @@ func main() {
 	defer stop()
 	awsCfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
 	if err != nil { logger.Error("aws configuration failed", "error", err); os.Exit(1) }
-	client := sns.NewFromConfig(awsCfg)
+	var snsOptions []func(*sns.Options)
+	if endpoint := os.Getenv("SNS_ENDPOINT_URL"); endpoint != "" {
+		snsOptions = append(snsOptions, func(o *sns.Options) { o.BaseEndpoint = &endpoint })
+	}
+	client := sns.NewFromConfig(awsCfg, snsOptions...)
 
 	jobs := make(chan []types.PublishBatchRequestEntry, publishers*4)
 	var submitted, published, failed atomic.Uint64
