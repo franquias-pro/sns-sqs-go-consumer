@@ -98,9 +98,10 @@ func (c *Consumer) poll(ctx context.Context) {
 	backoff := time.Second
 	for ctx.Err() == nil {
 		reserved := 0
-		// Reserve capacity *before* ReceiveMessage. A returned message never
-		// sits in a large local backlog while its visibility clock runs.
-		for reserved < 10 {
+		// Receive a single FIFO message at a time. SQS will not expose the
+		// next message from its group until this one is acknowledged, so
+		// workers can process different groups concurrently in order.
+		for reserved < 1 {
 			select {
 			case c.slots <- struct{}{}: reserved++
 			case <-ctx.Done():
@@ -109,7 +110,7 @@ func (c *Consumer) poll(ctx context.Context) {
 			}
 		}
 		result, err := c.queue.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
-			QueueUrl: aws.String(c.cfg.QueueURL), MaxNumberOfMessages: 10,
+			QueueUrl: aws.String(c.cfg.QueueURL), MaxNumberOfMessages: 1,
 			WaitTimeSeconds: 20, VisibilityTimeout: c.cfg.VisibilityTimeout,
 			MessageSystemAttributeNames: []types.MessageSystemAttributeName{types.MessageSystemAttributeNameApproximateReceiveCount},
 		})

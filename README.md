@@ -1,6 +1,6 @@
 # SNS → SQS consumer em Go
 
-Exemplo de consumer para eventos SNS entregues em uma fila SQS Standard com **raw message delivery**. O processo lê até 10 mensagens por chamada, usa long polling, impõe um limite de mensagens em voo, trata eventos com workers e confirma em lotes. A meta de **1.000 mensagens/s é uma hipótese de dimensionamento**, que depende da duração do handler, dos limites da conta AWS, da rede, da quantidade de réplicas e do destino do processamento.
+Exemplo de consumer para eventos SNS FIFO entregues em uma fila SQS FIFO com **raw message delivery**. O processo usa long polling, limita mensagens em voo, trata grupos distintos em paralelo com workers e confirma em lotes. Lê uma mensagem por chamada para manter a ordem de processamento dentro de cada `MessageGroupId`. A meta de **1.000 mensagens/s é uma hipótese de dimensionamento**, que depende do número de grupos ativos, da duração do handler, dos limites da conta AWS, da rede, das réplicas e do MongoDB.
 
 ## Estrutura
 
@@ -9,8 +9,8 @@ cmd/consumer/           composição e ciclo de vida
 cmd/loadgen/            gerador de carga SNS para medir vazão real
 internal/config/        configuração e validação
 internal/consumer/      polling, workers e confirmação SQS
-internal/handler/       regra de negócio de exemplo
-internal/storage/mongodb/ persistência idempotente dos eventos
+internal/handler/       comandos despachados pelo tipo do evento
+internal/repository/mongodb/ operações MongoDB e idempotência
 internal/health/        liveness e readiness HTTP
 internal/observability/ logs, contadores e adaptador Elastic APM
 infra/                  tópico SNS, fila SQS, DLQ e assinatura (Terraform)
@@ -29,19 +29,31 @@ curl -f http://localhost:8080/healthz
 curl -f http://localhost:8080/readyz
 ```
 
-Publique duas vezes o mesmo evento e confira que só um documento foi gravado:
+Publique duas vezes o mesmo evento no grupo do pedido, com IDs de deduplicação SNS distintos, e confira que só um documento foi gravado:
 
 ```bash
 for i in 1 2; do
   docker compose exec -T localstack awslocal sns publish \
-    --topic-arn arn:aws:sns:us-east-1:000000000000:example-events \
+    --topic-arn arn:aws:sns:us-east-1:000000000000:example-events.fifo \
+    --message-group-id ord-1 --message-deduplication-id "demo-create-$i" \
     --message '{"event_id":"demo-1","type":"order.created","occurred_at":"2026-09-28T20:00:00Z","data":{"order_id":"ord-1"}}'
 done
 docker compose exec -T mongo mongosh --quiet events \
   --eval 'db.ingested_events.countDocuments({_id:"demo-1"})'
 ```
 
-O último comando deve imprimir `1`. Para ver a vazão local: `docker compose --profile load run --rm loadgen`. O perfil publica por 60 segundos com alvo de 1.000 eventos/s; ajuste `RATE_PER_SECOND` no Compose se o computador não acompanhar. Pare com `docker compose down`; `docker compose down -v` também remove os dados locais.
+O último comando deve imprimir `1` após o processamento. Para excluir os eventos do pedido, publique o comando `order.deleted` no **mesmo grupo**:
+
+```bash
+docker compose exec -T localstack awslocal sns publish \
+  --topic-arn arn:aws:sns:us-east-1:000000000000:example-events.fifo \
+  --message-group-id ord-1 --message-deduplication-id demo-delete-1 \
+  --message '{"event_id":"demo-delete-1","type":"order.deleted","occurred_at":"2026-09-28T20:05:00Z","data":{"order_id":"ord-1"}}'
+docker compose exec -T mongo mongosh --quiet events \
+  --eval 'db.ingested_events.countDocuments({order_id:"ord-1"})'
+```
+
+O último comando deve imprimir `0` após o processamento. Para ver a vazão local: `docker compose --profile load run --rm loadgen`. O perfil publica por 60 segundos com alvo de 1.000 eventos/s; ajuste `RATE_PER_SECOND` no Compose se o computador não acompanhar. Pare com `docker compose down`; `docker compose down -v` também remove os dados locais.
 
 ## AWS sem Compose
 
@@ -68,8 +80,12 @@ Para publicar um evento:
 ```bash
 aws sns publish --region us-east-1 \
   --topic-arn "$(cd infra && terraform output -raw topic_arn)" \
+  --message-group-id ord-123 \
+  --message-deduplication-id e8471bd4-15e8-4db8-991c-f0acc57f5e7b \
   --message file://examples/order-created.json
 ```
+
+Para excluir, publique `examples/order-deleted.json` com `--message-group-id ord-123` e um novo `--message-deduplication-id` igual ao `event_id` desse evento. Um publisher deve usar sempre `order_id` como grupo para preservar a ordem por pedido. Migrar recursos Standard já existentes para FIFO cria novos nomes `.fifo`; planeje a troca de fila e tópico antes de aplicar Terraform em um ambiente existente.
 
 ## Configuração
 
@@ -80,10 +96,10 @@ aws sns publish --region us-east-1 \
 | `AWS_REGION` | `us-east-1` | Região AWS |
 | `MONGO_URI` | obrigatório | URI de conexão MongoDB |
 | `MONGO_DATABASE` | `events` | Database dos eventos |
-| `MONGO_COLLECTION` | `ingested_events` | Collection dos eventos |
+| `MONGO_COLLECTION` | `ingested_events` | Collection dos eventos; o repositório usa também `<nome>_deletions` para marcadores de exclusão |
 | `MONGO_MAX_POOL_SIZE` | `100` | Tamanho máximo do pool por servidor |
 | `HEALTH_ADDR` | `:8080` | Listener HTTP das probes |
-| `POLLERS` | `16` | Leituras paralelas, cada uma com até 10 mensagens |
+| `POLLERS` | `16` | Leituras paralelas de uma mensagem cada; aumente conforme latência e quantidade de grupos |
 | `WORKERS` | `200` | Máximo de mensagens simultâneas no processo |
 | `ACKERS` | `8` | Confirmadores com `DeleteMessageBatch` |
 | `PROCESS_TIMEOUT` | `15s` | Prazo individual do handler |
@@ -103,7 +119,7 @@ O arquivo `.env.example` é um modelo; Go não lê `.env` automaticamente. Em pr
 `Dockerfile` compila um binário estático e o executa como usuário sem privilégios em uma imagem `scratch`. O workflow em `.github/workflows/deploy.yml` executa os jobs em sequência: `compile` (build Go), `integration` (validação do Compose e teste SNS → SQS → MongoDB) e `image` (build da imagem). Cada job só roda se o anterior passar. Em pull requests, a imagem é construída sem publicação; em cada push na `main`, o último job publica no GitHub Container Registry (`ghcr.io`) as tags `latest` e `sha-<commit completo>`:
 
 ```bash
-docker pull ghcr.io/mamartins1997/sns-sqs-go-consumer:latest
+docker pull ghcr.io/franquias-pro/sns-sqs-go-consumer:latest
 ```
 
 O workflow usa o `GITHUB_TOKEN` com permissão `packages: write`. Pacotes novos do GHCR podem nascer privados: para permitir pull anônimo ou por um cluster sem credenciais, configure a visibilidade do pacote como pública no GitHub. Se permanecer privado, configure `imagePullSecrets` no Deployment com credenciais de leitura do pacote. Para deploy reproduzível, substitua `latest` por uma tag `sha-<commit completo>` em `k8s/deployment.yaml` e use `imagePullPolicy: IfNotPresent`.
@@ -132,7 +148,7 @@ O consumer depende de interfaces pequenas (`Metrics`, `Tracer` e `MessageTrace`)
 
 O [blueprint de Matheus Fidelis](https://fidelissauro.dev/sqs-consumer-go/) compara leitura e deleção unitárias com lotes, workers e channels. Este projeto usa leitura e confirmação em lotes, além de limitar mensagens em voo e verificar falhas individuais no `DeleteMessageBatch`. Os resultados do artigo medem essencialmente operações SQS; o processamento real pode mudar muito a vazão.
 
-O comando `cmd/loadgen` publica eventos `order.created` no SNS em lotes de 10. Ele exige `sns:Publish` no tópico e gera custo na AWS. Para uma primeira medição de 60 segundos:
+O comando `cmd/loadgen` publica eventos `order.created` no SNS FIFO em lotes de 10, com `MessageGroupId` e `MessageDeduplicationId` por entrada. Cada pedido gerado tem seu próprio grupo para medir paralelismo; cargas com poucos grupos terão vazão menor. Ele exige `sns:Publish` no tópico e gera custo na AWS. Para uma primeira medição de 60 segundos:
 
 ```bash
 export SNS_TOPIC_ARN="$(cd infra && terraform output -raw topic_arn)"
@@ -143,26 +159,29 @@ O gerador informa quantas mensagens foram submetidas, publicadas ou falharam, e 
 
 ## Logs e Elastic APM
 
-- Logs JSON com `slog`: inicialização, resumo a cada 60 segundos (`received_1m`, `processed_1m`, `failed_1m`, `deleted_1m`, `deleted_per_second_1m`, `in_flight`), totais no encerramento e detalhes de cada falha. Sucessos individuais só em `debug` para evitar volume excessivo.
+- Logs JSON com `slog`: inicialização, resumo a cada 60 segundos (`received_1m`, `processed_1m`, `failed_1m`, `deleted_1m`, `deleted_per_second_1m`, `in_flight`), totais no encerramento, exclusões de pedidos em `info` e detalhes de cada falha. Criações individuais só em `debug` para evitar volume excessivo.
 - Cada mensagem tem uma transação `SQS process event`; erros são enviados ao APM. Logs de falha incluem `trace.id` para correlação. Transações terminam após a confirmação SQS, portanto falha de deleção aparece como falha da transação.
 - Métricas customizadas no Elastic APM: `consumer.received.total`, `consumer.processed.total`, `consumer.failed.total`, `consumer.deleted.total`, `consumer.delete_failed.total`, `consumer.in_flight`. As métricas `*.total` são contadores cumulativos por instância; calcule a taxa usando a diferença entre amostras. O agente também publica métricas de **Go runtime** (`golang.goroutines`, heap, GC etc.).
 - As métricas do runtime Go precisam de visualizações próprias no Kibana. Para saúde da fila e autoscaling, observe também `ApproximateAgeOfOldestMessage`, mensagens visíveis e DLQ no CloudWatch; métricas locais não substituem a profundidade da fila.
 
 ## Semântica e capacidade
 
-SQS Standard entrega **ao menos uma vez** e pode duplicar mensagens. `internal/storage/mongodb` grava o evento completo em `payload_json`, com `event_id` como `_id` único. Uma tentativa repetida com o mesmo ID retorna sucesso lógico e a mensagem é confirmada no SQS. A regra de exemplo aceita `order.created`; ao adicionar efeitos adicionais (pagamento, e-mail ou escrita em outra collection), implemente-os na mesma fronteira idempotente ou com um padrão transacional apropriado. IDs iguais com conteúdos diferentes são tratados como duplicatas; o primeiro documento permanece.
+O `switch` em `internal/handler` despacha `order.created` para `Repository.Create` e `order.deleted` para `Repository.DeleteByOrderID`. O repositório MongoDB guarda cada evento de criação com `event_id` como `_id` único, `order_id` como campo e o JSON completo em `payload_json`. O delete remove todos os eventos do `order_id` e mantém um marcador em `<MONGO_COLLECTION>_deletions`, com `_id=order_id`. Assim, uma repetição do delete é segura, e uma criação antiga reentregue depois do delete não recria o pedido. IDs iguais com conteúdos diferentes são tratados como duplicatas; o primeiro documento permanece até a exclusão. O mesmo repositório pode receber métodos de busca ou update para novos tipos de comando.
+
+SNS/SQS FIFO preserva ordem **dentro do mesmo grupo**, então publishers devem usar `order_id` como `MessageGroupId` tanto na criação quanto no delete. A deduplicação FIFO tem janela limitada; a idempotência no MongoDB continua necessária. A exclusão é definitiva para o `order_id` neste exemplo: para recriar um pedido após o delete, defina uma nova política de versão ou identidade. Os dois documentos (marcador e eventos) não são escritos em transação: se o processo cair após o marcador, o SQS reentrega o delete para concluir a limpeza. Para invariantes transacionais mais fortes entre collections, use MongoDB com replica set e transação.
 
 Erros de parsing ou de negócio não são confirmados; a mensagem reaparece após o visibility timeout e vai à DLQ após `maxReceiveCount=5`. Uma falha parcial em `DeleteMessageBatch` é verificada por item, e esses itens também serão reenviados. Configure alarmes para idade da fila e mensagens na DLQ. Se um handler ignorar o contexto e exceder seu prazo, o processo pode continuar ocupado; ajuste timeouts das chamadas externas e o visibility timeout de acordo com o pior caso esperado.
 
-Como primeira estimativa, `concorrência ≈ vazão desejada × tempo médio de processamento`: 1.000/s × 0,2s = 200 workers. Com 1 segundo por evento, seriam cerca de 1.000 workers somando todas as réplicas. `POLLERS=16` e `WORKERS=200` são parâmetros iniciais; execute carga sustentada, meça `deleted_per_second_1m`, latência, CPU, memória e idade da fila, e ajuste réplicas e limites. Com 1.000/s sustentados, serão cerca de 86,4 milhões de mensagens/dia; considere custos de SNS, SQS e APM.
+Como primeira estimativa, `concorrência ≈ vazão desejada × tempo médio de processamento`: 1.000/s × 0,2s = 200 workers. Com 1 segundo por evento, seriam cerca de 1.000 workers somando todas as réplicas. FIFO exige também grupos ativos suficientes, pois cada grupo avança em série. `POLLERS=16` e `WORKERS=200` são parâmetros iniciais, não uma garantia de 1.000/s; execute carga sustentada, meça `deleted_per_second_1m`, latência, CPU, memória e idade da fila, e ajuste pollers, réplicas e limites. Com 1.000/s sustentados, serão cerca de 86,4 milhões de mensagens/dia; considere custos de SNS, SQS e APM.
 
-As chamadas `ReceiveMessage` têm máximo de 10 mensagens e espera de 20 segundos. O limite de capacidade é reservado antes da leitura, de modo que a visibilidade de uma mensagem recebida não se esgote em um backlog local. As confirmações são agrupadas por até 10 mensagens ou 50 ms. No SIGTERM, o processo interrompe novas leituras, drena mensagens já recebidas e tenta confirmar os sucessos até `SHUTDOWN_TIMEOUT`.
+As chamadas `ReceiveMessage` têm máximo de 1 mensagem e espera de 20 segundos. O limite de capacidade é reservado antes da leitura, de modo que a visibilidade de uma mensagem recebida não se esgote em um backlog local. As confirmações são agrupadas por até 10 mensagens de grupos distintos ou 50 ms. No SIGTERM, o processo interrompe novas leituras, drena mensagens já recebidas e tenta confirmar os sucessos até `SHUTDOWN_TIMEOUT`.
 
 ## Referências
 
 - [AWS SDK for Go v2: SQS](https://docs.aws.amazon.com/sdk-for-go/v2/developer-guide/go_sqs_code_examples.html)
 - [AWS: visibility timeout](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html)
 - [AWS: dead-letter queues](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html)
+- [AWS: lógica de entrega FIFO](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/FIFO-queues-understanding-logic.html)
 - [Elastic APM Go: métricas](https://www.elastic.co/docs/reference/apm/agents/go/metrics)
 - [Elastic APM Go: instrumentação](https://www.elastic.co/docs/reference/apm/agents/go/custom-instrumentation)
 - [MongoDB Go Driver: inserções e `_id` único](https://www.mongodb.com/docs/drivers/go/current/crud/insert/)

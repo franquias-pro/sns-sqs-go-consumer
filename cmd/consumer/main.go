@@ -20,7 +20,7 @@ import (
 	"example.com/sns-sqs-go-consumer/internal/handler"
 	"example.com/sns-sqs-go-consumer/internal/health"
 	"example.com/sns-sqs-go-consumer/internal/observability"
-	"example.com/sns-sqs-go-consumer/internal/storage/mongodb"
+	"example.com/sns-sqs-go-consumer/internal/repository/mongodb"
 )
 
 func main() {

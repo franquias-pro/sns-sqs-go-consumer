@@ -38,7 +38,7 @@ services:
       AWS_SECRET_ACCESS_KEY: test
       AWS_EC2_METADATA_DISABLED: "true"
       SQS_ENDPOINT_URL: http://localstack:4566
-      SQS_QUEUE_URL: http://localstack:4566/queue/us-east-1/000000000000/example-events
+      SQS_QUEUE_URL: http://localstack:4566/queue/us-east-1/000000000000/example-events.fifo
       MONGO_URI: mongodb://mongo:27017
       MONGO_DATABASE: events
       MONGO_COLLECTION: ingested_events
@@ -66,7 +66,7 @@ services:
       AWS_SECRET_ACCESS_KEY: test
       AWS_EC2_METADATA_DISABLED: "true"
       SNS_ENDPOINT_URL: http://localstack:4566
-      SNS_TOPIC_ARN: arn:aws:sns:us-east-1:000000000000:example-events
+      SNS_TOPIC_ARN: arn:aws:sns:us-east-1:000000000000:example-events.fifo
       RATE_PER_SECOND: "1000"
       DURATION: 60s
     depends_on:

@@ -17,15 +17,23 @@ variable "name" {
 
 provider "aws" { region = var.aws_region }
 
-resource "aws_sns_topic" "events" { name = var.name }
+resource "aws_sns_topic" "events" {
+  name                  = "${var.name}.fifo"
+  fifo_topic            = true
+  fifo_throughput_scope = "MessageGroup"
+}
 
 resource "aws_sqs_queue" "dead_letter" {
-  name                      = "${var.name}-dlq"
+  name                      = "${var.name}-dlq.fifo"
+  fifo_queue                = true
   message_retention_seconds = 1209600
 }
 
 resource "aws_sqs_queue" "events" {
-  name                       = var.name
+  name                       = "${var.name}.fifo"
+  fifo_queue                 = true
+  deduplication_scope        = "messageGroup"
+  fifo_throughput_limit      = "perMessageGroupId"
   visibility_timeout_seconds = 120
   receive_wait_time_seconds  = 20
   message_retention_seconds  = 345600

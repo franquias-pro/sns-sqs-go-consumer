@@ -95,7 +95,11 @@ func main() {
 				sequence++
 				body := fmt.Sprintf(`{"event_id":"%s-%d","type":"order.created","occurred_at":"%s","data":{"order_id":"load-%d"}}`,
 					prefix, sequence, time.Now().UTC().Format(time.RFC3339Nano), sequence)
-				batch[i] = types.PublishBatchRequestEntry{Id: aws.String(strconv.Itoa(i)), Message: aws.String(body)}
+				batch[i] = types.PublishBatchRequestEntry{
+					Id: aws.String(strconv.Itoa(i)), Message: aws.String(body),
+					MessageGroupId: aws.String(fmt.Sprintf("load-%d", sequence)),
+					MessageDeduplicationId: aws.String(fmt.Sprintf("%s-%d", prefix, sequence)),
+				}
 			}
 			select {
 			case jobs <- batch: submitted.Add(10)

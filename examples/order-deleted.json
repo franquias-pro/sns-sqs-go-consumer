@@ -1,0 +1,6 @@
+{
+  "event_id": "9d7390ed-2d54-47cc-ac41-6cb543218d71",
+  "type": "order.deleted",
+  "occurred_at": "2026-09-28T20:05:00Z",
+  "data": {"order_id": "ord-123"}
+}

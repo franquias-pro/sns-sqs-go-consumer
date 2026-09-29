@@ -38,17 +38,37 @@ jobs:
           curl -fsS http://localhost:8080/readyz
           for i in 1 2; do
             docker compose exec -T localstack awslocal sns publish \
-              --topic-arn arn:aws:sns:us-east-1:000000000000:example-events \
+              --topic-arn arn:aws:sns:us-east-1:000000000000:example-events.fifo \
+              --message-group-id ci-1 --message-deduplication-id "ci-create-$i" \
               --message '{"event_id":"ci-smoke-1","type":"order.created","occurred_at":"2026-09-28T20:00:00Z","data":{"order_id":"ci-1"}}'
           done
           for attempt in $(seq 1 30); do
             count=$(docker compose exec -T mongo mongosh --quiet events \
               --eval 'db.ingested_events.countDocuments({_id:"ci-smoke-1"})' | tr -d '\r')
-            if [ "$count" = "1" ]; then exit 0; fi
+            if [ "$count" = "1" ]; then break; fi
             sleep 2
           done
-          docker compose logs consumer localstack
-          exit 1
+          if [ "$count" != "1" ]; then exit 1; fi
+          docker compose exec -T localstack awslocal sns publish \
+            --topic-arn arn:aws:sns:us-east-1:000000000000:example-events.fifo \
+            --message-group-id ci-1 --message-deduplication-id ci-delete-1 \
+            --message '{"event_id":"ci-delete-1","type":"order.deleted","occurred_at":"2026-09-28T20:05:00Z","data":{"order_id":"ci-1"}}'
+          for attempt in $(seq 1 30); do
+            state=$(docker compose exec -T mongo mongosh --quiet events \
+              --eval 'print(db.ingested_events.countDocuments({order_id:"ci-1"}) + ":" + db.ingested_events_deletions.countDocuments({_id:"ci-1"}))' | tr -d '\r')
+            if [ "$state" = "0:1" ]; then break; fi
+            sleep 2
+          done
+          if [ "$state" != "0:1" ]; then exit 1; fi
+          # A new SNS deduplication ID forces redelivery of the old event body.
+          docker compose exec -T localstack awslocal sns publish \
+            --topic-arn arn:aws:sns:us-east-1:000000000000:example-events.fifo \
+            --message-group-id ci-1 --message-deduplication-id ci-replay-1 \
+            --message '{"event_id":"ci-smoke-1","type":"order.created","occurred_at":"2026-09-28T20:00:00Z","data":{"order_id":"ci-1"}}'
+          sleep 5
+          count=$(docker compose exec -T mongo mongosh --quiet events \
+            --eval 'db.ingested_events.countDocuments({order_id:"ci-1"})' | tr -d '\r')
+          [ "$count" = "0" ]
       - name: Diagnose Compose startup
         if: failure()
         run: |
