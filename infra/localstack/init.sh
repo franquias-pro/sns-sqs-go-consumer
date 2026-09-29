@@ -4,7 +4,7 @@ set -eu
 topic_arn=$(awslocal sns create-topic --name example-events --query TopicArn --output text)
 dlq_url=$(awslocal sqs create-queue --queue-name example-events-dlq --query QueueUrl --output text)
 dlq_arn=$(awslocal sqs get-queue-attributes --queue-url "$dlq_url" --attribute-names QueueArn --query 'Attributes.QueueArn' --output text)
-queue_url=$(awslocal sqs create-queue --queue-name example-events --attributes VisibilityTimeout=120 ReceiveMessageWaitTimeSeconds=20 --query QueueUrl --output text)
+queue_url=$(awslocal sqs create-queue --queue-name example-events --attributes VisibilityTimeout=120,ReceiveMessageWaitTimeSeconds=20 --query QueueUrl --output text)
 queue_arn=$(awslocal sqs get-queue-attributes --queue-url "$queue_url" --attribute-names QueueArn --query 'Attributes.QueueArn' --output text)
 
 export TOPIC_ARN="$topic_arn" QUEUE_ARN="$queue_arn" DLQ_ARN="$dlq_arn"
