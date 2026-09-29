@@ -14,7 +14,7 @@ internal/storage/mongodb/ persistência idempotente dos eventos
 internal/health/        liveness e readiness HTTP
 internal/observability/ logs, contadores e adaptador Elastic APM
 infra/                  tópico SNS, fila SQS, DLQ e assinatura (Terraform)
-k8s/                    Deployment e configuração Kubernetes
+k8s/                    ConfigMap, Deployment, Service, ServiceAccount e modelo de Secret
 compose.yaml             execução local com MongoDB e LocalStack
 examples/               payload de exemplo
 ```
@@ -100,19 +100,31 @@ O arquivo `.env.example` é um modelo; Go não lê `.env` automaticamente. Em pr
 
 ## Imagem Docker e Kubernetes
 
-`Dockerfile` compila um binário estático e o executa como usuário sem privilégios em uma imagem `scratch`. O build padrão gera o consumer:
+`Dockerfile` compila um binário estático e o executa como usuário sem privilégios em uma imagem `scratch`. O workflow em `.github/workflows/build.yml` compila o Go, valida o Compose, executa um teste de integração SNS → SQS → MongoDB e faz build da imagem em pull requests. Em cada push na `main`, depois dessas verificações, publica no GitHub Container Registry (`ghcr.io`) as tags `latest` e `sha-<commit completo>`:
 
 ```bash
-docker build -t SEU_REGISTRY/sns-sqs-go-consumer:1.0.0 .
-docker push SEU_REGISTRY/sns-sqs-go-consumer:1.0.0
+docker pull ghcr.io/franquias-pro/sns-sqs-go-consumer:latest
 ```
 
-Antes de `kubectl apply -f k8s/consumer.yaml`, troque no manifesto a imagem, a URL da fila e o endpoint APM. Crie um Secret chamado `sns-sqs-go-consumer` com a chave `mongo-uri` (e opcionalmente `apm-secret-token`). Associe o ServiceAccount a uma role IAM com `sqs:ReceiveMessage` e `sqs:DeleteMessage` na fila, por EKS Pod Identity ou IRSA. O manifesto traz duas réplicas como exemplo; ajuste workers, requests e limits com dados do teste de carga. O `terminationGracePeriodSeconds` de 60 s cobre o `SHUTDOWN_TIMEOUT` de 45 s e o flush de telemetria.
+O workflow usa o `GITHUB_TOKEN` com permissão `packages: write`. Pacotes novos do GHCR podem nascer privados: para permitir pull anônimo ou por um cluster sem credenciais, configure a visibilidade do pacote como pública no GitHub. Se permanecer privado, configure `imagePullSecrets` no Deployment com credenciais de leitura do pacote. Para deploy reproduzível, substitua `latest` por uma tag `sha-<commit completo>` em `k8s/deployment.yaml` e use `imagePullPolicy: IfNotPresent`.
+
+Os recursos Kubernetes estão em arquivos separados. Ajuste `k8s/configmap.yaml` (URL da fila, região, endpoint APM), configure a role IAM no `k8s/serviceaccount.yaml` via EKS Pod Identity ou IRSA e crie o Secret real a partir do modelo. O Secret precisa de `mongo-uri`; `apm-secret-token` é opcional. O arquivo `k8s/secret.yaml` está no `.gitignore`:
+
+```bash
+cp k8s/secret.example.yaml k8s/secret.yaml
+# Edite k8s/secret.yaml com a URI real e, se necessário, o token APM.
+kubectl apply -f k8s/configmap.yaml -f k8s/secret.yaml -f k8s/serviceaccount.yaml
+kubectl apply -f k8s/deployment.yaml -f k8s/service.yaml
+kubectl rollout status deployment/sns-sqs-go-consumer
+kubectl port-forward service/sns-sqs-go-consumer 8080:8080
+```
+
+O Service `ClusterIP` expõe somente a porta de saúde dentro do cluster; o port-forward acima serve para inspecionar os endpoints localmente. O Deployment traz duas réplicas como exemplo; ajuste workers, requests e limits com dados do teste de carga. O `terminationGracePeriodSeconds` de 60 s cobre o `SHUTDOWN_TIMEOUT` de 45 s e o flush de telemetria.
 
 - `GET /healthz`: liveness, responde enquanto o processo HTTP está ativo.
 - `GET /readyz`: readiness, responde 200 somente durante a operação e com MongoDB acessível; devolve 503 no desligamento ou se o ping falhar.
 
-As probes HTTP são chamadas diretamente no Pod; o consumer não precisa de um Service Kubernetes para recebê-las.
+As probes HTTP são chamadas diretamente no Pod. O Service permite monitoramento interno ou acesso via port-forward.
 
 O consumer depende de interfaces pequenas (`Metrics`, `Tracer` e `MessageTrace`). A implementação Elastic APM, os contadores e o resumo periódico de logs ficam em `internal/observability`. Assim, alterações no exportador ou na forma de registrar métricas não exigem mudanças no fluxo de leitura e confirmação da fila.
 
