@@ -17,6 +17,7 @@ import (
 	appconfig "example.com/sns-sqs-go-consumer/internal/config"
 	"example.com/sns-sqs-go-consumer/internal/consumer"
 	"example.com/sns-sqs-go-consumer/internal/handler"
+	"example.com/sns-sqs-go-consumer/internal/observability"
 )
 
 func main() {
@@ -25,11 +26,7 @@ func main() {
 		slog.Error("invalid configuration", "error", err)
 		os.Exit(1)
 	}
-	level := slog.LevelInfo
-	if cfg.LogLevel == "debug" {
-		level = slog.LevelDebug
-	}
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
+	logger := observability.NewLogger(cfg.LogLevel)
 	slog.SetDefault(logger)
 
 	// The HTTP timeout must exceed the SQS 20-second long poll.
@@ -46,16 +43,20 @@ func main() {
 	}
 
 	tracer := apm.DefaultTracer()
-	metrics := &consumer.Stats{}
+	metrics := &observability.Counters{}
 	deregister := tracer.RegisterMetricsGatherer(metrics)
 	defer deregister()
 	defer tracer.Flush(nil)
 
 	client := sqs.NewFromConfig(awsCfg)
-	runner := consumer.New(client, cfg, handler.New(logger), logger, tracer, metrics)
+	runner := consumer.New(client, cfg, handler.New(logger), logger, observability.NewElasticTracer(tracer), metrics)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	statsDone := make(chan struct{})
+	go metrics.LogPeriodic(statsDone, logger)
 	logger.Info("consumer started", "pollers", cfg.Pollers, "workers", cfg.Workers, "ackers", cfg.Ackers)
 	runner.Run(ctx)
+	close(statsDone)
+	metrics.LogTotals(logger)
 	logger.Info("consumer stopped")
 }

@@ -5,12 +5,14 @@ Exemplo de consumer para eventos SNS entregues em uma fila SQS Standard com **ra
 ## Estrutura
 
 ```text
-cmd/consumer/          composição e ciclo de vida
-internal/config/       configuração e validação
-internal/consumer/     polling, workers, confirmação e métricas
-internal/handler/      contrato e regra de negócio de exemplo
-infra/                 tópico SNS, fila SQS, DLQ e assinatura (Terraform)
-examples/              payload de exemplo
+cmd/consumer/           composição e ciclo de vida
+cmd/loadgen/            gerador de carga SNS para medir vazão real
+internal/config/        configuração e validação
+internal/consumer/      polling, workers e confirmação SQS
+internal/handler/       regra de negócio de exemplo
+internal/observability/ logs, contadores e adaptador Elastic APM
+infra/                  tópico SNS, fila SQS, DLQ e assinatura (Terraform)
+examples/               payload de exemplo
 ```
 
 ## Início rápido
@@ -61,6 +63,21 @@ aws sns publish --region us-east-1 \
 | `ELASTIC_APM_METRICS_INTERVAL` | valor do agente | Exemplo: `30s` |
 
 O arquivo `.env.example` é um modelo; Go não lê `.env` automaticamente. Em produção, injete variáveis via workload e guarde o token como segredo.
+
+O consumer depende de interfaces pequenas (`Metrics`, `Tracer` e `MessageTrace`). A implementação Elastic APM, os contadores e o resumo periódico de logs ficam em `internal/observability`. Assim, alterações no exportador ou na forma de registrar métricas não exigem mudanças no fluxo de leitura e confirmação da fila.
+
+## Medindo a vazão
+
+O [blueprint de Matheus Fidelis](https://fidelissauro.dev/sqs-consumer-go/) compara leitura e deleção unitárias com lotes, workers e channels. Este projeto usa leitura e confirmação em lotes, além de limitar mensagens em voo e verificar falhas individuais no `DeleteMessageBatch`. Os resultados do artigo medem essencialmente operações SQS; o processamento real pode mudar muito a vazão.
+
+O comando `cmd/loadgen` publica eventos `order.created` no SNS em lotes de 10. Ele exige `sns:Publish` no tópico e gera custo na AWS. Para uma primeira medição de 60 segundos:
+
+```bash
+export SNS_TOPIC_ARN="$(cd infra && terraform output -raw topic_arn)"
+RATE_PER_SECOND=1000 DURATION=60s PUBLISHERS=20 go run ./cmd/loadgen
+```
+
+O gerador informa quantas mensagens foram submetidas, publicadas ou falharam, e sua taxa efetiva. Compare essa taxa com `deleted_per_second_1m` do consumer e com a idade da fila no CloudWatch. Deixe o teste rodar tempo suficiente para medir regime estável; um burst curto pode mascarar acúmulo na fila. `RATE_PER_SECOND` aceita múltiplos de 10 entre 10 e 10.000; se o SNS ou a rede não acompanhar a taxa solicitada, a taxa efetiva será menor.
 
 ## Logs e Elastic APM
 

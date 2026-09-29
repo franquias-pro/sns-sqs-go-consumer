@@ -2,6 +2,7 @@ package consumer
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"time"
@@ -54,16 +55,16 @@ func (c *Consumer) deleteBatch(ctx context.Context, batch []acknowledgement) {
 	for i, ack := range batch {
 		id := aws.ToString(entries[i].Id)
 		fields := []any{"message_id", aws.ToString(ack.message.MessageId), "trace.id", ack.traceID}
-		if err != nil || failed[id] != "" {
-			c.stats.DeleteFailed.Add(1)
-			ack.tx.Result = "failure"
-			c.log.Log(ctx, slog.LevelError, "message delete failed; SQS will retry after visibility timeout", append(fields, "error", err, "sqs_code", failed[id])...)
+		ackErr := err
+		if code := failed[id]; code != "" { ackErr = fmt.Errorf("SQS delete failed: %s", code) }
+		if ackErr != nil {
+			c.metrics.DeleteFailed()
+			c.log.Log(ctx, slog.LevelError, "message delete failed; SQS will retry after visibility timeout", append(fields, "error", ackErr)...)
 		} else {
-			c.stats.Deleted.Add(1)
-			ack.tx.Result = "success"
+			c.metrics.Deleted()
 			c.log.Log(ctx, slog.LevelDebug, "message acknowledged", fields...)
 		}
-		ack.tx.End()
+		ack.tx.End(ackErr)
 		c.done()
 	}
 }

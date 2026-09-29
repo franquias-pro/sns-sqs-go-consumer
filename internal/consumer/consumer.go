@@ -10,7 +10,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
-	"go.elastic.co/apm/v2"
 
 	"example.com/sns-sqs-go-consumer/internal/config"
 )
@@ -22,13 +21,31 @@ type Queue interface {
 
 type Handler interface { Handle(context.Context, string) error }
 
+// Consumer owns only message flow. Instrumentation can be replaced without
+// changing the polling, processing, or acknowledgement logic.
+type Metrics interface {
+	Received()
+	Processed()
+	ProcessingFailed()
+	Deleted()
+	DeleteFailed()
+	Done()
+}
+
+type Tracer interface { StartMessage() MessageTrace }
+
+type MessageTrace interface {
+	TraceID() string
+	End(error)
+}
+
 type Consumer struct {
 	queue Queue
 	cfg config.Config
 	handler Handler
 	log *slog.Logger
-	tracer *apm.Tracer
-	stats *Stats
+	tracer Tracer
+	metrics Metrics
 	slots chan struct{}
 	jobs chan types.Message
 	acks chan acknowledgement
@@ -36,13 +53,13 @@ type Consumer struct {
 
 type acknowledgement struct {
 	message types.Message
-	tx *apm.Transaction
+	tx MessageTrace
 	traceID string
 }
 
-func New(queue Queue, cfg config.Config, handler Handler, log *slog.Logger, tracer *apm.Tracer, stats *Stats) *Consumer {
+func New(queue Queue, cfg config.Config, handler Handler, log *slog.Logger, tracer Tracer, metrics Metrics) *Consumer {
 	return &Consumer{
-		queue: queue, cfg: cfg, handler: handler, log: log, tracer: tracer, stats: stats,
+		queue: queue, cfg: cfg, handler: handler, log: log, tracer: tracer, metrics: metrics,
 		slots: make(chan struct{}, cfg.Workers), jobs: make(chan types.Message), acks: make(chan acknowledgement, cfg.Workers),
 	}
 }
@@ -52,9 +69,6 @@ func New(queue Queue, cfg config.Config, handler Handler, log *slog.Logger, trac
 func (c *Consumer) Run(ctx context.Context) {
 	processCtx, cancelProcess := context.WithCancel(context.Background())
 	defer cancelProcess()
-	statsDone := make(chan struct{})
-	go c.reportStats(statsDone)
-	defer close(statsDone)
 	var pollWG, workerWG, ackWG sync.WaitGroup
 	for range c.cfg.Ackers {
 		ackWG.Add(1)
@@ -78,27 +92,6 @@ func (c *Consumer) Run(ctx context.Context) {
 	close(c.acks)
 	ackWG.Wait()
 	if processCtx.Err() != nil { c.log.Warn("shutdown deadline reached; unfinished messages will be retried") }
-	c.log.Info("execution totals", "received", c.stats.Received.Load(), "processed", c.stats.Processed.Load(),
-		"failed", c.stats.Failed.Load(), "deleted", c.stats.Deleted.Load(),
-		"delete_failed", c.stats.DeleteFailed.Load(), "in_flight", c.stats.InFlight.Load())
-}
-
-func (c *Consumer) reportStats(done <-chan struct{}) {
-	ticker := time.NewTicker(time.Minute)
-	defer ticker.Stop()
-	var received, processed, failed, deleted uint64
-	for {
-		select {
-		case <-done: return
-		case <-ticker.C:
-			r, p, f, d := c.stats.Received.Load(), c.stats.Processed.Load(), c.stats.Failed.Load(), c.stats.Deleted.Load()
-			c.log.Info("execution summary", "received_1m", r-received, "processed_1m", p-processed,
-				"failed_1m", f-failed, "deleted_1m", d-deleted,
-				"deleted_per_second_1m", float64(d-deleted)/60,
-				"in_flight", c.stats.InFlight.Load(), "delete_failed_total", c.stats.DeleteFailed.Load())
-			received, processed, failed, deleted = r, p, f, d
-		}
-	}
 }
 
 func (c *Consumer) poll(ctx context.Context) {
@@ -131,8 +124,7 @@ func (c *Consumer) poll(ctx context.Context) {
 		backoff = time.Second
 		c.release(reserved - len(result.Messages))
 		for _, msg := range result.Messages {
-			c.stats.Received.Add(1)
-			c.stats.InFlight.Add(1)
+			c.metrics.Received()
 			// Work already received must be handed to workers, even if the
 			// receive context is cancelled during shutdown.
 			c.jobs <- msg
@@ -145,8 +137,8 @@ func (c *Consumer) worker(ctx context.Context) {
 }
 
 func (c *Consumer) process(parent context.Context, msg types.Message) {
-	tx := c.tracer.StartTransaction("SQS process event", "messaging")
-	traceID := tx.TraceContext().Trace.String()
+	tx := c.tracer.StartMessage()
+	traceID := tx.TraceID()
 	ctx, cancel := context.WithTimeout(parent, c.cfg.ProcessTimeout)
 	defer cancel()
 	var err error
@@ -156,19 +148,15 @@ func (c *Consumer) process(parent context.Context, msg types.Message) {
 	}()
 	if err == nil { err = ctx.Err() }
 	if err != nil {
-		c.stats.Failed.Add(1)
-		tx.Result = "failure"
-		apmErr := c.tracer.NewError(err)
-		apmErr.SetTransaction(tx)
-		apmErr.Send()
-		tx.End()
+		c.metrics.ProcessingFailed()
+		tx.End(err)
 		c.log.Error("message processing failed", "message_id", aws.ToString(msg.MessageId), "trace.id", traceID, "error", err)
 		c.done()
 		return
 	}
-	c.stats.Processed.Add(1)
+	c.metrics.Processed()
 	c.acks <- acknowledgement{message: msg, tx: tx, traceID: traceID}
 }
 
 func (c *Consumer) release(n int) { for range n { <-c.slots } }
-func (c *Consumer) done() { c.stats.InFlight.Add(-1); c.release(1) }
+func (c *Consumer) done() { c.metrics.Done(); c.release(1) }
