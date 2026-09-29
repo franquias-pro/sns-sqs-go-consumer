@@ -36,6 +36,12 @@ jobs:
           done
           docker compose logs consumer localstack
           exit 1
+      - name: Diagnose Compose startup
+        if: failure()
+        run: |
+          docker compose ps -a
+          docker compose logs --no-color localstack mongo consumer
+          docker compose exec -T localstack sh -c 'curl -s http://localhost:4566/_localstack/init/ready || true'
       - name: Stop Compose
         if: always()
         run: docker compose down -v
