@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mamartins1997/sns-sqs-go-consumer/internal/event"
+	"github.com/mamartins1997/sns-sqs-go-consumer/internal/domain"
 )
 
 type orderData struct {
@@ -16,8 +16,8 @@ type orderData struct {
 
 // Orders is the application service used by the event dispatcher.
 type Orders interface {
-	CreateOrder(context.Context, event.Event, string, string) error
-	DeleteOrder(context.Context, event.Event, string) error
+	CreateOrder(context.Context, domain.Event, string, string) error
+	DeleteOrder(context.Context, domain.Event, string) error
 }
 
 type Handler struct {
@@ -29,7 +29,7 @@ func New(orders Orders) *Handler {
 }
 
 func (h *Handler) Handle(ctx context.Context, body string) error {
-	var evt event.Event
+	var evt domain.Event
 	if err := json.Unmarshal([]byte(body), &evt); err != nil {
 		return fmt.Errorf("decode event: %w", err)
 	}

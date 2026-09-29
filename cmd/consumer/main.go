@@ -10,9 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"go.elastic.co/apm/v2"
 
 	appconfig "github.com/mamartins1997/sns-sqs-go-consumer/internal/config"
@@ -21,7 +18,8 @@ import (
 	"github.com/mamartins1997/sns-sqs-go-consumer/internal/health"
 	"github.com/mamartins1997/sns-sqs-go-consumer/internal/observability"
 	"github.com/mamartins1997/sns-sqs-go-consumer/internal/repository/mongodb"
-	"github.com/mamartins1997/sns-sqs-go-consumer/internal/service"
+	"github.com/mamartins1997/sns-sqs-go-consumer/internal/usecase"
+	sqsclient "github.com/mamartins1997/sns-sqs-go-consumer/pkg/sqs"
 )
 
 func main() {
@@ -33,14 +31,10 @@ func main() {
 	logger := observability.NewLogger(cfg.LogLevel)
 	slog.SetDefault(logger)
 
-	// The HTTP timeout must exceed the SQS 20-second long poll.
-	httpClient := awshttp.NewBuildableClient().WithTimeout(30 * time.Second).
-		WithTransportOptions(func(t *http.Transport) {
-			t.MaxIdleConns = cfg.Pollers + cfg.Ackers + 32
-			t.MaxIdleConnsPerHost = cfg.Pollers + cfg.Ackers + 32
-		})
-	awsCfg, err := config.LoadDefaultConfig(context.Background(),
-		config.WithRegion(cfg.AWSRegion), config.WithHTTPClient(httpClient))
+	client, err := sqsclient.New(context.Background(), sqsclient.Config{
+		Region: cfg.AWSRegion, EndpointURL: cfg.SQSEndpointURL,
+		MaxIdleConnections: cfg.Pollers + cfg.Ackers + 32,
+	})
 	if err != nil {
 		logger.Error("aws configuration failed", "error", err)
 		os.Exit(1)
@@ -61,12 +55,7 @@ func main() {
 	deregister := tracer.RegisterMetricsGatherer(metrics)
 	defer deregister()
 
-	var sqsOptions []func(*sqs.Options)
-	if cfg.SQSEndpointURL != "" {
-		sqsOptions = append(sqsOptions, func(o *sqs.Options) { o.BaseEndpoint = &cfg.SQSEndpointURL })
-	}
-	client := sqs.NewFromConfig(awsCfg, sqsOptions...)
-	orders := service.NewOrders(logger, store)
+	orders := usecase.NewOrders(logger, store)
 	runner := consumer.New(client, cfg, handler.New(orders), logger, observability.NewElasticTracer(tracer), metrics)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

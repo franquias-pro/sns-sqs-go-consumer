@@ -11,12 +11,13 @@ cmd/consumer/           composição e ciclo de vida
 cmd/loadgen/            gerador de carga SNS para medir vazão real
 internal/config/        configuração e validação
 internal/consumer/      polling, workers e confirmação SQS
-internal/handler/       comandos despachados pelo tipo do evento
-internal/event/         formato compartilhado do evento
-internal/service/       regras dos comandos e logs de negócio
+internal/handler/       validação e despacho dos eventos recebidos
+internal/domain/        modelo do evento
+internal/usecase/       criação e exclusão de pedidos, logs de negócio
 internal/repository/mongodb/ operações MongoDB e idempotência
 internal/health/        liveness e readiness HTTP
 internal/observability/ logs, contadores e adaptador Elastic APM
+pkg/sqs/                construção do cliente SQS com AWS SDK
 infra/                  tópico SNS, fila SQS, DLQ e assinatura (Terraform)
 k8s/                    ConfigMap, Deployment, Service, ServiceAccount e modelo de Secret
 compose.yaml             execução local com MongoDB e LocalStack
@@ -148,6 +149,19 @@ As probes HTTP são chamadas diretamente no Pod. O Service permite monitoramento
 
 O consumer depende de interfaces pequenas (`Metrics`, `Tracer` e `MessageTrace`). A implementação Elastic APM, os contadores e o resumo periódico de logs ficam em `internal/observability`. Assim, alterações no exportador ou na forma de registrar métricas não exigem mudanças no fluxo de leitura e confirmação da fila.
 
+## Organização do código
+
+A organização segue a ideia do projeto [golang-rabbitmq](https://github.com/mamartins1997/golang-rabbitmq): `domain` define o modelo; `handler` interpreta a entrada; `usecase` executa o comando; `repository` persiste; `pkg/sqs` inicializa o cliente do SDK. O `cmd/consumer` conecta essas partes. O gerador em `cmd/loadgen` publica no SNS para ensaios de carga.
+
+| Aspecto | Exemplo RabbitMQ | Este consumer SNS/SQS |
+| --- | --- | --- |
+| Entrada | API HTTP produtora e consumer AMQP | Consumer SQS e gerador de carga SNS; HTTP apenas para probes |
+| Confirmação | `Ack` ou `Nack` no canal AMQP | `DeleteMessageBatch` após sucesso; falha aguarda visibility timeout |
+| Ordem e paralelismo | Prefetch 1 no exemplo | FIFO por `MessageGroupId` (`order_id`), vários grupos em paralelo |
+| Dados | Mensagem publicada e processada no use case | Eventos gravados no MongoDB com idempotência e marcador de exclusão |
+
+As operações do SQS permanecem em `internal/consumer`, que controla polling, workers, prazo de visibilidade e confirmação. `pkg/sqs` contém apenas a configuração do cliente, como `pkg/rabbitmq` encapsula a conexão no projeto de referência. Não há servidor de publicação HTTP nem Swagger porque a entrada de produção deste exemplo é SNS → SQS.
+
 ## Medindo a vazão
 
 O [blueprint de Matheus Fidelis](https://fidelissauro.dev/sqs-consumer-go/) compara leitura e deleção unitárias com lotes, workers e channels. Este projeto usa leitura e confirmação em lotes, além de limitar mensagens em voo e verificar falhas individuais no `DeleteMessageBatch`. Os resultados do artigo medem essencialmente operações SQS; o processamento real pode mudar muito a vazão.
@@ -170,7 +184,7 @@ O gerador informa quantas mensagens foram submetidas, publicadas ou falharam, e 
 
 ## Semântica e capacidade
 
-O `switch` em `internal/handler` valida e encaminha `order.created` para `Orders.CreateOrder` e `order.deleted` para `Orders.DeleteOrder`. `internal/service` contém as ações e os logs de negócio; o repositório MongoDB implementa `Create` e `DeleteByOrderID`. Ele guarda cada evento de criação com `event_id` como `_id` único, `order_id` como campo e o JSON completo em `payload_json`. O delete remove todos os eventos do `order_id` e mantém um marcador em `<MONGO_COLLECTION>_deletions`, com `_id=order_id`. Assim, uma repetição do delete é segura, e uma criação antiga reentregue depois do delete não recria o pedido. IDs iguais com conteúdos diferentes são tratados como duplicatas; o primeiro documento permanece até a exclusão. O mesmo repositório pode receber métodos de busca ou update para novos tipos de comando.
+O `switch` em `internal/handler` valida e encaminha `order.created` para `Orders.CreateOrder` e `order.deleted` para `Orders.DeleteOrder`. `internal/usecase` contém as ações e os logs de negócio; o repositório MongoDB implementa `Create` e `DeleteByOrderID`. Ele guarda cada evento de criação com `event_id` como `_id` único, `order_id` como campo e o JSON completo em `payload_json`. O delete remove todos os eventos do `order_id` e mantém um marcador em `<MONGO_COLLECTION>_deletions`, com `_id=order_id`. Assim, uma repetição do delete é segura, e uma criação antiga reentregue depois do delete não recria o pedido. IDs iguais com conteúdos diferentes são tratados como duplicatas; o primeiro documento permanece até a exclusão. O mesmo repositório pode receber métodos de busca ou update para novos tipos de comando.
 
 SNS/SQS FIFO preserva ordem **dentro do mesmo grupo**, então publishers devem usar `order_id` como `MessageGroupId` tanto na criação quanto no delete. A deduplicação FIFO tem janela limitada; a idempotência no MongoDB continua necessária. A exclusão é definitiva para o `order_id` neste exemplo: para recriar um pedido após o delete, defina uma nova política de versão ou identidade. Os dois documentos (marcador e eventos) não são escritos em transação: se o processo cair após o marcador, o SQS reentrega o delete para concluir a limpeza. Para invariantes transacionais mais fortes entre collections, use MongoDB com replica set e transação.
 

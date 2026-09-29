@@ -10,7 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
-	"github.com/mamartins1997/sns-sqs-go-consumer/internal/event"
+	"github.com/mamartins1997/sns-sqs-go-consumer/internal/domain"
 )
 
 type EventRepository struct {
@@ -46,7 +46,7 @@ type deletionMarker struct {
 	DeletedAt time.Time `bson:"deleted_at"`
 }
 
-func (r *EventRepository) Create(ctx context.Context, evt event.Event, orderID, body string) (bool, error) {
+func (r *EventRepository) Create(ctx context.Context, evt domain.Event, orderID, body string) (bool, error) {
 	deleted, err := r.wasDeleted(ctx, orderID)
 	if err != nil { return false, err }
 	if deleted { return false, nil }
