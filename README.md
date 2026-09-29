@@ -100,7 +100,7 @@ O arquivo `.env.example` é um modelo; Go não lê `.env` automaticamente. Em pr
 
 ## Imagem Docker e Kubernetes
 
-`Dockerfile` compila um binário estático e o executa como usuário sem privilégios em uma imagem `scratch`. O workflow em `.github/workflows/build.yml` compila o Go, valida o Compose, executa um teste de integração SNS → SQS → MongoDB e faz build da imagem em pull requests. Em cada push na `main`, depois dessas verificações, publica no GitHub Container Registry (`ghcr.io`) as tags `latest` e `sha-<commit completo>`:
+`Dockerfile` compila um binário estático e o executa como usuário sem privilégios em uma imagem `scratch`. O workflow em `.github/workflows/deploy.yml` executa os jobs `compile` (build Go) e `integration` (validação do Compose e teste SNS → SQS → MongoDB) em paralelo. O job `image` depende dos dois: constrói a imagem em pull requests e, em cada push na `main`, publica no GitHub Container Registry (`ghcr.io`) as tags `latest` e `sha-<commit completo>`:
 
 ```bash
 docker pull ghcr.io/franquias-pro/sns-sqs-go-consumer:latest
