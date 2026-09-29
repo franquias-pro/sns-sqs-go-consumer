@@ -1,0 +1,6 @@
+{
+  "event_id": "e8471bd4-15e8-4db8-991c-f0acc57f5e7b",
+  "type": "order.created",
+  "occurred_at": "2026-09-28T20:00:00Z",
+  "data": {"order_id": "ord-123", "total_cents": 7900}
+}
