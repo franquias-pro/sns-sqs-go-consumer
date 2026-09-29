@@ -62,7 +62,7 @@ func (c *Consumer) deleteBatch(ctx context.Context, batch []acknowledgement) {
 			c.log.Log(ctx, slog.LevelError, "message delete failed; SQS will retry after visibility timeout", append(fields, "error", ackErr)...)
 		} else {
 			c.metrics.Deleted()
-			c.log.Log(ctx, slog.LevelDebug, "message acknowledged", fields...)
+			c.log.Log(ctx, slog.LevelInfo, "message acknowledged", fields...)
 		}
 		ack.tx.End(ackErr)
 		c.done()

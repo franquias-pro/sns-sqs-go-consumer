@@ -21,6 +21,7 @@ import (
 	"example.com/sns-sqs-go-consumer/internal/health"
 	"example.com/sns-sqs-go-consumer/internal/observability"
 	"example.com/sns-sqs-go-consumer/internal/repository/mongodb"
+	"example.com/sns-sqs-go-consumer/internal/service"
 )
 
 func main() {
@@ -65,7 +66,8 @@ func main() {
 		sqsOptions = append(sqsOptions, func(o *sqs.Options) { o.BaseEndpoint = &cfg.SQSEndpointURL })
 	}
 	client := sqs.NewFromConfig(awsCfg, sqsOptions...)
-	runner := consumer.New(client, cfg, handler.New(logger, store), logger, observability.NewElasticTracer(tracer), metrics)
+	orders := service.NewOrders(logger, store)
+	runner := consumer.New(client, cfg, handler.New(orders), logger, observability.NewElasticTracer(tracer), metrics)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	healthHandler := health.New(store)

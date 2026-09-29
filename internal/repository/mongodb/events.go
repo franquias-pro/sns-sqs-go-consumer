@@ -10,7 +10,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 
-	"example.com/sns-sqs-go-consumer/internal/handler"
+	"example.com/sns-sqs-go-consumer/internal/event"
 )
 
 type EventRepository struct {
@@ -46,18 +46,18 @@ type deletionMarker struct {
 	DeletedAt time.Time `bson:"deleted_at"`
 }
 
-func (r *EventRepository) Create(ctx context.Context, event handler.Event, orderID, body string) (bool, error) {
+func (r *EventRepository) Create(ctx context.Context, evt event.Event, orderID, body string) (bool, error) {
 	deleted, err := r.wasDeleted(ctx, orderID)
 	if err != nil { return false, err }
 	if deleted { return false, nil }
 
 	_, err = r.events.InsertOne(ctx, storedEvent{
-		ID: event.EventID, OrderID: orderID, Type: event.Type, OccurredAt: event.OccurredAt,
+		ID: evt.EventID, OrderID: orderID, Type: evt.Type, OccurredAt: evt.OccurredAt,
 		Payload: body, ReceivedAt: time.Now().UTC(),
 	})
 	inserted := err == nil
 	if err != nil && !mongo.IsDuplicateKeyError(err) {
-		return false, fmt.Errorf("insert event %s: %w", event.EventID, err)
+		return false, fmt.Errorf("insert event %s: %w", evt.EventID, err)
 	}
 
 	// A delete may arrive between the first check and insert. The second

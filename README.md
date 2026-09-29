@@ -10,6 +10,8 @@ cmd/loadgen/            gerador de carga SNS para medir vazão real
 internal/config/        configuração e validação
 internal/consumer/      polling, workers e confirmação SQS
 internal/handler/       comandos despachados pelo tipo do evento
+internal/event/         formato compartilhado do evento
+internal/service/       regras dos comandos e logs de negócio
 internal/repository/mongodb/ operações MongoDB e idempotência
 internal/health/        liveness e readiness HTTP
 internal/observability/ logs, contadores e adaptador Elastic APM
@@ -159,14 +161,14 @@ O gerador informa quantas mensagens foram submetidas, publicadas ou falharam, e 
 
 ## Logs e Elastic APM
 
-- Logs JSON com `slog`: inicialização, resumo a cada 60 segundos (`received_1m`, `processed_1m`, `failed_1m`, `deleted_1m`, `deleted_per_second_1m`, `in_flight`), totais no encerramento, exclusões de pedidos em `info` e detalhes de cada falha. Criações individuais só em `debug` para evitar volume excessivo.
+- Logs JSON com `slog` em `info`: criação, duplicata ignorada, exclusão do pedido, confirmação de cada mensagem no SQS, inicialização e resumo a cada 60 segundos (`received_1m`, `processed_1m`, `failed_1m`, `deleted_1m`, `deleted_per_second_1m`, `in_flight`). Falhas saem em `error` e totais no encerramento. A 1.000 mensagens/s, os logs individuais podem gerar aproximadamente 2.000 linhas/s; dimensione coleta e retenção de acordo.
 - Cada mensagem tem uma transação `SQS process event`; erros são enviados ao APM. Logs de falha incluem `trace.id` para correlação. Transações terminam após a confirmação SQS, portanto falha de deleção aparece como falha da transação.
 - Métricas customizadas no Elastic APM: `consumer.received.total`, `consumer.processed.total`, `consumer.failed.total`, `consumer.deleted.total`, `consumer.delete_failed.total`, `consumer.in_flight`. As métricas `*.total` são contadores cumulativos por instância; calcule a taxa usando a diferença entre amostras. O agente também publica métricas de **Go runtime** (`golang.goroutines`, heap, GC etc.).
 - As métricas do runtime Go precisam de visualizações próprias no Kibana. Para saúde da fila e autoscaling, observe também `ApproximateAgeOfOldestMessage`, mensagens visíveis e DLQ no CloudWatch; métricas locais não substituem a profundidade da fila.
 
 ## Semântica e capacidade
 
-O `switch` em `internal/handler` despacha `order.created` para `Repository.Create` e `order.deleted` para `Repository.DeleteByOrderID`. O repositório MongoDB guarda cada evento de criação com `event_id` como `_id` único, `order_id` como campo e o JSON completo em `payload_json`. O delete remove todos os eventos do `order_id` e mantém um marcador em `<MONGO_COLLECTION>_deletions`, com `_id=order_id`. Assim, uma repetição do delete é segura, e uma criação antiga reentregue depois do delete não recria o pedido. IDs iguais com conteúdos diferentes são tratados como duplicatas; o primeiro documento permanece até a exclusão. O mesmo repositório pode receber métodos de busca ou update para novos tipos de comando.
+O `switch` em `internal/handler` valida e encaminha `order.created` para `Orders.CreateOrder` e `order.deleted` para `Orders.DeleteOrder`. `internal/service` contém as ações e os logs de negócio; o repositório MongoDB implementa `Create` e `DeleteByOrderID`. Ele guarda cada evento de criação com `event_id` como `_id` único, `order_id` como campo e o JSON completo em `payload_json`. O delete remove todos os eventos do `order_id` e mantém um marcador em `<MONGO_COLLECTION>_deletions`, com `_id=order_id`. Assim, uma repetição do delete é segura, e uma criação antiga reentregue depois do delete não recria o pedido. IDs iguais com conteúdos diferentes são tratados como duplicatas; o primeiro documento permanece até a exclusão. O mesmo repositório pode receber métodos de busca ou update para novos tipos de comando.
 
 SNS/SQS FIFO preserva ordem **dentro do mesmo grupo**, então publishers devem usar `order_id` como `MessageGroupId` tanto na criação quanto no delete. A deduplicação FIFO tem janela limitada; a idempotência no MongoDB continua necessária. A exclusão é definitiva para o `order_id` neste exemplo: para recriar um pedido após o delete, defina uma nova política de versão ou identidade. Os dois documentos (marcador e eventos) não são escritos em transação: se o processo cair após o marcador, o SQS reentrega o delete para concluir a limpeza. Para invariantes transacionais mais fortes entre collections, use MongoDB com replica set e transação.
 

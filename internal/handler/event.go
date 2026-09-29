@@ -5,70 +5,53 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
-	"time"
-)
 
-type Event struct {
-	EventID    string          `json:"event_id"`
-	Type       string          `json:"type"`
-	OccurredAt time.Time       `json:"occurred_at"`
-	Data       json.RawMessage `json:"data"`
-}
+	"example.com/sns-sqs-go-consumer/internal/event"
+)
 
 type orderData struct {
 	OrderID string `json:"order_id"`
 }
 
-// Repository exposes the persistence operations used by the event commands.
-type Repository interface {
-	Create(context.Context, Event, string, string) (inserted bool, err error)
-	DeleteByOrderID(context.Context, string) (deleted int64, err error)
+// Orders is the application service used by the event dispatcher.
+type Orders interface {
+	CreateOrder(context.Context, event.Event, string, string) error
+	DeleteOrder(context.Context, event.Event, string) error
 }
 
 type Handler struct {
-	logger *slog.Logger
-	repository Repository
+	orders Orders
 }
 
-func New(logger *slog.Logger, repository Repository) *Handler {
-	return &Handler{logger: logger, repository: repository}
+func New(orders Orders) *Handler {
+	return &Handler{orders: orders}
 }
 
 func (h *Handler) Handle(ctx context.Context, body string) error {
-	var event Event
-	if err := json.Unmarshal([]byte(body), &event); err != nil {
+	var evt event.Event
+	if err := json.Unmarshal([]byte(body), &evt); err != nil {
 		return fmt.Errorf("decode event: %w", err)
 	}
-	if event.EventID == "" || event.Type == "" {
+	if evt.EventID == "" || evt.Type == "" {
 		return errors.New("event_id and type are required")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
-	switch event.Type {
+	switch evt.Type {
 	case "order.created":
-		data, err := decodeOrderData(event.Data)
+		data, err := decodeOrderData(evt.Data)
 		if err != nil { return err }
-		inserted, err := h.repository.Create(ctx, event, data.OrderID, body)
-		if err != nil { return err }
-		if inserted {
-			h.logger.Debug("order event persisted", "event_id", event.EventID, "order_id", data.OrderID)
-		} else {
-			h.logger.Debug("order event ignored (duplicate or deleted order)", "event_id", event.EventID, "order_id", data.OrderID)
-		}
+		return h.orders.CreateOrder(ctx, evt, data.OrderID, body)
 	case "order.deleted":
-		data, err := decodeOrderData(event.Data)
+		data, err := decodeOrderData(evt.Data)
 		if err != nil { return err }
-		deleted, err := h.repository.DeleteByOrderID(ctx, data.OrderID)
-		if err != nil { return err }
-		h.logger.Info("order deleted", "event_id", event.EventID, "order_id", data.OrderID, "deleted_events", deleted)
+		return h.orders.DeleteOrder(ctx, evt, data.OrderID)
 	default:
-		return errors.New("unsupported event type: " + event.Type)
+		return errors.New("unsupported event type: " + evt.Type)
 	}
-	return nil
 }
 
 func decodeOrderData(raw json.RawMessage) (orderData, error) {
